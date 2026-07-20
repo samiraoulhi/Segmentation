@@ -17,7 +17,7 @@ from skimage import measure
 from scipy.spatial.distance import directed_hausdorff
 
 
-for sample in dataset['test'].take(1):
+for sample in dataset['train'].take(1):
     img_tf  = sample['image']
     mask_tf = sample['segmentation_mask']
 
@@ -29,8 +29,6 @@ mask_gt =np.where((mask_np == 1) | (mask_np == 3), 1, 0)
 
 
 img_gray   = rgb2gray(img_np)
-# NOTE: ce premier gaussian (sigma=3) etait ecrase par le second (sigma=4)
-# juste en dessous -> supprime, on ne garde que sigma=4 qui est celui utilise.
 
 
 rows, cols = np.where(mask_gt)
@@ -149,8 +147,8 @@ def preprocess_for_eval(sample):
 
     image = tf.cast(image, tf.float32) / 255.0
 
-    # Classe 1 = animal
-    mask_gt = tf.cast((mask == 1), tf.float32).numpy().squeeze()
+    # Classe 1 = animal, classe 3 = bordure 
+    mask_gt = tf.cast((mask == 1) | (mask == 3), tf.float32).numpy().squeeze()
 
     return image.numpy(), mask_gt
 
@@ -340,7 +338,8 @@ for sample in train_data.take(1):
     mask_tf = sample['segmentation_mask']
 
 mask = mask_tf.numpy().squeeze()
-gt = (mask == 1)
+# Classe 1 = animal, classe 3 = bordure 
+gt = (mask == 1) | (mask == 3)
 
 pred_mask = np.zeros(img_gray.shape, dtype=bool)
 rr, cc = polygon(snake[:, 0], snake[:, 1], img_gray.shape)
