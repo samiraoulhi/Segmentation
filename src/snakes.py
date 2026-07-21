@@ -162,17 +162,25 @@ def run_snake_fast(img_np):
                           max_num_iter=400)
 
     return contour_to_mask(snap, img_gray.shape)
-
 def preprocess_for_eval(sample):
-    # Redimensionnement des images en 128x128 comme Chan-Vese
-    image = tf.image.resize(sample["image"], (IMG_SIZE, IMG_SIZE))
-    mask = tf.image.resize(sample["segmentation_mask"], (IMG_SIZE, IMG_SIZE), method='nearest')
-
+    
+    image = tf.image.resize(
+        sample["image"], 
+        (IMG_SIZE, IMG_SIZE)
+    )
+    
+    mask = tf.image.resize(
+        sample["segmentation_mask"], 
+        (IMG_SIZE, IMG_SIZE), 
+        method='nearest'
+    )
+    
     image = tf.cast(image, tf.float32) / 255.0
-    mask_gt = tf.cast(mask == 1, tf.float32).numpy().squeeze()
-
+    
+    tf_mask = tf.cast(mask, tf.int32).numpy().squeeze()
+    mask_gt = np.where((tf_mask == 1) | (tf_mask == 2), 1, 0)
+    
     return image.numpy(), mask_gt
-
 
 
 
@@ -181,7 +189,7 @@ print("\n" + "="*50)
 print("VÉRIFICATION VISUELLE SUR LES 5 PREMIÈRES IMAGES")
 print("="*50)
 
-# On prend les 5 premières images du dataset d'entraînement
+
 for i, sample in enumerate(train_data.take(5)):
   
     img, gt = preprocess_for_eval(sample)
