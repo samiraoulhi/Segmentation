@@ -1,1 +1,286 @@
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+import tensorflow_datasets as tfds
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+dataset, info = tfds.load('oxford_iiit_pet:4.0.0', with_info=True)
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage.color import rgb2gray
+from skimage.filters import gaussian
+from skimage.segmentation import active_contour
+from skimage.draw import polygon
+from skimage import measure
+from scipy.spatial.distance import directed_hausdorff
+
+for sample in dataset['train'].take(1):
+    img_tf  = sample['image']
+    mask_tf = sample['segmentation_mask']
+
+img_np  = img_tf.numpy().astype(np.float32) / 255.0
+mask_np = mask_tf.numpy().squeeze()
+
+# label 1 = animal (ground truth)
+mask_gt =np.where((mask_np== 1) | (mask_np == 3), 1, 0)
+
+
+img_gray   = rgb2gray(img_np)
+img_smooth = gaussian(img_gray, sigma=3, preserve_range=False)
+
+rows, cols = np.where(mask_gt)
+r_c    = (rows.min() + rows.max()) / 2
+c_c    = (cols.min() + cols.max()) / 2
+radius = max(rows.max() - rows.min(),
+             cols.max() - cols.min()) / 2 * 0.75
+
+s    = np.linspace(0, 2 * np.pi, 400)
+init = np.array([r_c + radius * np.sin(s),
+                 c_c + radius * np.cos(s)]).T
+init[:, 0] = np.clip(init[:, 0], 1, img_gray.shape[0] - 2)
+init[:, 1] = np.clip(init[:, 1], 1, img_gray.shape[1] - 2)
+
+
+
+img_smooth = gaussian(img_gray, sigma=4, preserve_range=False)
+
+
+iter_steps = [1, 3, 6, 10, 15, 25, 40, 60, 90, 130, 200, 350, 600, 1000, 2500]
+print("Calcul des snapshots...")
+snapshots = [
+    active_contour(img_smooth, init.copy(),
+                   alpha=0.005,       
+                   beta=0.001,       
+                   gamma=0.01,      
+                   max_num_iter=n)
+    for n in iter_steps
+]
+print("Fait.")
+
+
+def contour_to_mask(contour, shape):
+    mask = np.zeros(shape, dtype=bool)
+    rr, cc = polygon(contour[:, 0], contour[:, 1], shape)
+    mask[rr, cc] = True
+    return mask
+
+def dice_score(pred, gt):
+    inter = np.logical_and(pred, gt).sum()
+    return 2 * inter / (pred.sum() + gt.sum() + 1e-8)
+
+def iou_score(pred, gt):
+    inter = np.logical_and(pred, gt).sum()
+    union = np.logical_or(pred, gt).sum()
+    return inter / (union + 1e-8)
+
+def hausdorff_dist(c_pred, c_gt):
+    return max(directed_hausdorff(c_pred, c_gt)[0],
+               directed_hausdorff(c_gt, c_pred)[0])
+
+
+contours_gt = measure.find_contours(mask_gt.astype(float), 0.5)
+gt_contour  = max(contours_gt, key=len)
+
+
+dice_vals, iou_vals, haus_vals = [], [], []
+for snap in snapshots:
+    m = contour_to_mask(snap, img_gray.shape)
+    dice_vals.append(dice_score(m, mask_gt))
+    iou_vals.append(iou_score(m, mask_gt))
+    haus_vals.append(hausdorff_dist(snap, gt_contour))
+
+
+final      = snapshots[-1]
+mask_final = contour_to_mask(final, img_gray.shape)
+print("=" * 45)
+print(f"  Dice           : {dice_score(mask_final, mask_gt):.4f}")
+print(f"  IoU            : {iou_score(mask_final, mask_gt):.4f}")
+print(f"  Hausdorff (px) : {hausdorff_dist(final, gt_contour):.2f}")
+print("=" * 45)
+
+
+fig_final, ax_final = plt.subplots(figsize=(7, 7))
+ax_final.imshow(img_gray, cmap='gray')
+ax_final.plot(init[:, 1], init[:, 0], '--r', lw=1.5, label='Initial')
+ax_final.plot(gt_contour[:, 1], gt_contour[:, 0], '-g', lw=1.5, label='GT')
+ax_final.plot(snapshots[-1][:, 1], snapshots[-1][:, 0], '-b', lw=2.5, label='Snake Final')
+ax_final.set_title(f"Segmentation Finale (Dice: {dice_score(mask_final, mask_gt):.4f})")
+ax_final.legend(loc='lower right')
+ax_final.axis('off')
+plt.show()
+
+
+fig2, axes = plt.subplots(1, 3, figsize=(14, 4))
+fig2.suptitle("Évolution des métriques — Oxford IIIT Pet", fontsize=13)
+
+for ax_, vals, label, color in zip(
+        axes,
+        [dice_vals, iou_vals, haus_vals],
+        ["Dice", "IoU", "Hausdorff (px)"],
+        ['b', 'g', 'r']):
+    ax_.plot(iter_steps, vals, f'o-{color}', lw=2)
+    ax_.set_title(label)
+    ax_.set_xlabel("Itérations (log)")
+    ax_.set_xscale('log')
+    ax_.grid(alpha=0.4)
+    if label != "Hausdorff (px)":
+        ax_.set_ylim(0, 1.05)
+
+plt.tight_layout()
+plt.show(block=True)
+
+
+
+
+IMG_SIZE = 128
+train_data = dataset['train']
+
+def run_snake_fast(img_np):
+    img_gray = rgb2gray(img_np)
+
+
+    img_smooth = gaussian(img_gray, sigma=3, preserve_range=False)
+
+ 
+    r_c, c_c = IMG_SIZE / 2, IMG_SIZE / 2
+
+    radius = (IMG_SIZE / 2) * 0.75
+   
+
+    s = np.linspace(0, 2 * np.pi, 400)
+    init = np.array([r_c + radius * np.sin(s), c_c + radius * np.cos(s)]).T
+    init[:, 0] = np.clip(init[:, 0], 1, IMG_SIZE - 2)
+    init[:, 1] = np.clip(init[:, 1], 1, IMG_SIZE - 2)
+
+    # Exécution du Snake (limité à 400 itérations pour que ça reste rapide)
+    snap = active_contour(img_smooth, init,
+                          alpha=0.005, beta=0.001, gamma=0.01,
+                          max_num_iter=400)
+
+    return contour_to_mask(snap, img_gray.shape)
+
+def preprocess_for_eval(sample):
+    # Redimensionnement des images en 128x128 comme Chan-Vese
+    image = tf.image.resize(sample["image"], (IMG_SIZE, IMG_SIZE))
+    mask = tf.image.resize(sample["segmentation_mask"], (IMG_SIZE, IMG_SIZE), method='nearest')
+
+    image = tf.cast(image, tf.float32) / 255.0
+    mask_gt = tf.cast(mask == 1, tf.float32).numpy().squeeze()
+
+    return image.numpy(), mask_gt
+
+
+
+
+
+print("\n" + "="*50)
+print("VÉRIFICATION VISUELLE SUR LES 5 PREMIÈRES IMAGES")
+print("="*50)
+
+# On prend les 5 premières images du dataset d'entraînement
+for i, sample in enumerate(train_data.take(5)):
+  
+    img, gt = preprocess_for_eval(sample)
+
+
+    pred_mask = run_snake_fast(img)
+
+  
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+  
+    axes[0].imshow(img)
+    axes[0].set_title("Image")
+    axes[0].axis("off")
+
+  
+    axes[1].imshow(gt, cmap="gray")
+    axes[1].set_title("Ground Truth")
+    axes[1].axis("off")
+
+   
+    axes[2].imshow(pred_mask, cmap="gray")
+    axes[2].set_title("Snake")
+    axes[2].axis("off")
+
+    fig.text(0.5, 0.05, f"FIGURE 3.{10+i} - Image {i+1}", ha='center', fontsize=14)
+
+    plt.subplots_adjust(bottom=0.2) # Laisse de la place pour le texte en bas
+    plt.show()
+
+
+
+
+print("\n" + "="*50)
+print("DÉBUT DE L'ÉVALUATION SUR 50 IMAGES (Format 128x128)")
+print("="*50)
+
+IMG_SIZE = 128
+train_data = dataset['train']
+
+def preprocess_for_eval(sample):
+    # Redimensionnement identique à Chan-Vese
+    image = tf.image.resize(sample["image"], (IMG_SIZE, IMG_SIZE))
+    mask = tf.image.resize(sample["segmentation_mask"], (IMG_SIZE, IMG_SIZE), method='nearest')
+
+    image = tf.cast(image, tf.float32) / 255.0
+    # On isole l'animal (Classe 1)
+    mask_gt = tf.cast(mask == 1, tf.float32).numpy().squeeze()
+
+    return image.numpy(), mask_gt
+
+def run_snake_fast(img_np):
+    img_gray = rgb2gray(img_np)
+ 
+    img_smooth = gaussian(img_gray, sigma=3, preserve_range=False)
+
+    
+    r_c, c_c = IMG_SIZE / 2, IMG_SIZE / 2
+    radius = (IMG_SIZE / 2) * 0.7
+    s = np.linspace(0, 2 * np.pi, 400)
+    init = np.array([r_c + radius * np.sin(s), c_c + radius * np.cos(s)]).T
+    init[:, 0] = np.clip(init[:, 0], 1, IMG_SIZE - 2)
+    init[:, 1] = np.clip(init[:, 1], 1, IMG_SIZE - 2)
+
+   
+    snap = active_contour(img_smooth, init,
+                          alpha=0.005, beta=0.001, gamma=0.01,
+                          max_num_iter=400)
+
+    return contour_to_mask(snap, img_gray.shape)
+
+results_eval = []
+print("Calcul en cours sur 50 images... (cela peut prendre une ou deux minutes)")
+
+for i, sample in enumerate(train_data.take(50)):
+    img, gt = preprocess_for_eval(sample)
+
+    # Prédiction
+    pred_mask = run_snake_fast(img)
+    pred_mask_float = pred_mask.astype(float)
+
+    # Utilisation de tes fonctions définies plus haut
+    d = dice_score(pred_mask_float, gt)
+    j = iou_score(pred_mask_float, gt)
+
+    results_eval.append((d, j))
+
+    if (i + 1) % 10 == 0:
+        print(f" -> Images traitées : {i+1}/50")
+
+dice_mean = np.mean([r[0] for r in results_eval])
+iou_mean = np.mean([r[1] for r in results_eval])
+
+print("\n" + "-" * 45)
+print("  RÉSULTATS FINAUX SUR 50 IMAGES (SNAKE)")
+print(f"  Dice moyen : {dice_mean:.4f}")
+print(f"  IoU moyen  : {iou_mean:.4f}")
+print("-" * 45)
+
+
+
 
